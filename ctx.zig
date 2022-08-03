@@ -571,14 +571,14 @@ pub fn ETable(comptime S: type) type {
     const fields = std.meta.fields(S);
     const len = fields.len;
     return struct {
-        inits: [len]fn (*anyopaque) void,
-        deinits: [len]fn (*anyopaque) void,
-        ticks: [len]fn (*anyopaque) void,
+        inits: [len]fn (e: EState, ptr: *anyopaque) void,
+        deinits: [len]fn (e: EState, ptr: *anyopaque) void,
+        ticks: [len]fn (e: EState, ptr: *anyopaque) void,
 
         pub fn init(comptime ctx: Ctx) @This() {
             var r: @This() = undefined;
             inline for (fields) |f, i| {
-                const eins = EInstance(ctx.from(getFieldEnum(S, f.name)), f.field_type);
+                const eins = EInstance(ctx.push(f.field_type));
 
                 r.inits[i] = eins.init;
                 r.deinits[i] = eins.deinit;
@@ -592,22 +592,16 @@ pub fn ETable(comptime S: type) type {
 pub fn EInstance(comptime ctx: Ctx) type {
     return struct {
         pub fn init(e: EState, ptr: *anyopaque) void {
-            var ins = e.as(ctx.Instance());
-            ins.ptr = @ptrCast(@TypeOf(ins.ptr), @alignCast(@alignOf(@TypeOf(ins.ptr)), ptr));
-
-            ins.initInstance();
+            var ins = e.as(ctx.parent.?.Instance());
+            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).initInstance();
         }
         pub fn deinit(e: EState, ptr: *anyopaque) void {
-            var ins = e.as(ctx.Instance());
-            ins.ptr = @ptrCast(@TypeOf(ins.ptr), @alignCast(@alignOf(@TypeOf(ins.ptr)), ptr));
-
-            ins.deinitInstance();
+            var ins = e.as(ctx.parent.?.Instance());
+            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).deinitInstance();
         }
         pub fn tick(e: EState, ptr: *anyopaque) void {
-            var ins = e.as(ctx.Instance());
-            ins.ptr = @ptrCast(@TypeOf(ins.ptr), @alignCast(@alignOf(@TypeOf(ins.ptr)), ptr));
-
-            ins.tickInstance();
+            var ins = e.as(ctx.parent.?.Instance());
+            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).tickInstance();
         }
     };
 }
@@ -618,10 +612,12 @@ pub fn Union(comptime U: type) type {
 
         isSet: bool = false,
         ustate: U = undefined,
+        estate: EState,
         etable: ETable(U) = undefined,
 
         pub fn metaInit(ins: anytype) !void {
-            ins.ptr.etable = ETable(U).init(ins.C);
+            ins.ptr.estate = ins.erase();
+            ins.ptr.etable = ETable(U).init(@TypeOf(ins).C);
         }
 
         pub fn set(self: *@This(), field: std.meta.Tag(U)) !void {
@@ -632,7 +628,7 @@ pub fn Union(comptime U: type) type {
             inline for (std.meta.fields(std.meta.Tag(U))) |f| {
                 if (f.value == @enumToInt(field)) {
                     @field(self.ustate, f.name) = undefined;
-                    self.etable.inits[@enumToInt(field)](&self.ustate);
+                    self.etable.inits[@enumToInt(field)](self.estate, @ptrCast(*anyopaque, &self.ustate));
                 }
             }
             self.isSet = true;
@@ -647,7 +643,7 @@ pub fn Union(comptime U: type) type {
             if (self.isSet) {
                 var active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
-                self.etable.ticks[@enumToInt(active)](&self.ustate);
+                self.etable.ticks[@enumToInt(active)](self.estate, @ptrCast(*anyopaque, &self.ustate));
             }
         }
 
@@ -655,7 +651,7 @@ pub fn Union(comptime U: type) type {
             if (self.isSet) {
                 var active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
-                self.etable.deinits[@enumToInt(active)](&self.ustate);
+                self.etable.deinits[@enumToInt(active)](self.estate, @ptrCast(*anyopaque, &self.ustate));
             }
         }
     };
@@ -738,7 +734,7 @@ pub fn TickFor(comptime T: type) type {
             const EIns = EInstance(@TypeOf(ins).C.push(T));
 
             return @This(){
-                .estate = ins.push(@as(*T, undefined)).erase(),
+                .estate = ins.erase(),
                 .fun = EIns.tick,
             };
         }
@@ -757,7 +753,7 @@ pub fn InitFor(comptime T: type) type {
             const EIns = EInstance(@TypeOf(ins).C.push(T));
 
             return @This(){
-                .estate = ins.push(@as(*T, undefined)).erase(),
+                .estate = ins.erase(),
                 .fun = EIns.init,
             };
         }
@@ -776,7 +772,7 @@ pub fn DeinitFor(comptime T: type) type {
             const EIns = EInstance(@TypeOf(ins).C.push(T));
 
             return @This(){
-                .estate = ins.push(@as(*T, undefined)).erase(),
+                .estate = ins.erase(),
                 .fun = EIns.deinit,
             };
         }
@@ -836,4 +832,66 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
                 ins.push(&ins.ptr.state).tickInstance();
         }
     };
+}
+
+pub fn setAlloc(gpa: *GPA) std.mem.Allocator {
+    return std.testing.allocator;
+}
+const MyApp = ctx.State(.{
+    ctx.OnInit(ctx.CallFn(setAlloc)),
+
+    //You can create nested states
+    ctx.State(.{
+        Foo, addOneToFoo, Bar, appendFooToBar,
+
+        //Same state again
+        ctx.State(.{
+            Foo, addOneToFoo, Bar, appendFooToBar,
+        }),
+    }),
+});
+
+const Foo = struct {
+    a: usize = 0,
+
+    pub fn tick(self: *@This()) void {
+        std.debug.print("Foo {any}: {}\n", .{ @ptrToInt(self), self.a });
+    }
+};
+
+fn addOneToFoo(foo: *Foo) void {
+    foo.a += 1;
+}
+
+const Bar = struct {
+    data: std.ArrayList(usize),
+
+    pub fn init(alloc: std.mem.Allocator) @This() {
+        return @This(){
+            .data = std.ArrayList(usize).init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.data.deinit();
+    }
+};
+
+fn appendFooToBar(foo: *Foo, bar: *Bar) !void {
+    try bar.data.append(foo.a);
+}
+
+test "Example" {
+    var app: MyApp = undefined;
+
+    //create a ctx instance
+    var ctx_instance = ctx.Ctx.init(&app);
+
+    ctx_instance.initInstance();
+    defer ctx_instance.deinitInstance();
+
+    //running the app state 3 times
+    ctx_instance.tickInstance();
+    ctx_instance.tickInstance();
+    ctx_instance.tickInstance();
 }
