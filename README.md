@@ -62,14 +62,14 @@ pub fn main() anyerror!void {
     var app: MyApp = undefined;
 
     //create a ctx instance
-    var ctx = ctx.Ctx.init(&app);
+    var ctx_instance = ctx.Ctx.init(&app);
 
     ctx.initInstance();
-    defer ctx.deinitInstance();
+    defer ctx_instance.deinitInstance();
     
     //running the app state 3 times
-    ctx.tickInstance();
-    ctx.tickInstance();
-    ctx.tickInstance();
+    ctx_instance.tickInstance();
+    ctx_instance.tickInstance();
+    ctx_instance.tickInstance();
 }
 ```
