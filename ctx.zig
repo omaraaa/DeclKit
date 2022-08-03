@@ -144,7 +144,7 @@ pub const Ctx = struct {
                     ctx.T.metaDeinit(self) catch |err| self.handleError(void, err);
                 }
                 if (comptime @hasDecl(ctx.T, "deinit")) {
-                    self.call(ctx.T.deinit);
+                    _ = self.call(ctx.T.deinit);
                 }
                 if (comptime @hasDecl(ctx.T, "InitFields")) {
                     comptime var i: usize = ctx.T.InitFields.len;
@@ -416,7 +416,7 @@ pub fn toTuple(comptime Systems: anytype) type {
     comptime var fields: []const std.builtin.Type.StructField = &.{};
 
     inline for (Systems) |s, i| {
-        const SType = if (comptime @TypeOf(s) == type) s else if (comptime @TypeOf(s) == void) u1 else OnTick(s);
+        const SType = if (comptime @TypeOf(s) == type) s else if (comptime @TypeOf(s) == void) u1 else CallFn(s);
 
         var num_buf: [128]u8 = undefined;
         const f = std.builtin.Type.StructField{
@@ -455,7 +455,7 @@ pub fn OnInit(comptime S: type) type {
     };
 }
 
-pub fn OnTick(comptime f: anytype) type {
+pub fn CallFn(comptime f: anytype) type {
     if (@typeInfo(@TypeOf(f)) != .Fn) {
         @compileError("Expected a Function");
     }
