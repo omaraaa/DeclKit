@@ -834,18 +834,18 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
     };
 }
 
-pub fn setAlloc(gpa: *GPA) std.mem.Allocator {
+pub fn setAlloc() std.mem.Allocator {
     return std.testing.allocator;
 }
-const MyApp = ctx.State(.{
-    ctx.OnInit(ctx.CallFn(setAlloc)),
+const MyApp = State(.{
+    OnInit(CallFn(setAlloc)),
 
     //You can create nested states
-    ctx.State(.{
+    State(.{
         Foo, addOneToFoo, Bar, appendFooToBar,
 
         //Same state again
-        ctx.State(.{
+        State(.{
             Foo, addOneToFoo, Bar, appendFooToBar,
         }),
     }),
@@ -885,7 +885,7 @@ test "Example" {
     var app: MyApp = undefined;
 
     //create a ctx instance
-    var ctx_instance = ctx.Ctx.init(&app);
+    var ctx_instance = Ctx.init(&app);
 
     ctx_instance.initInstance();
     defer ctx_instance.deinitInstance();
