@@ -257,7 +257,7 @@ pub const Ctx = struct {
                     @compileError(@typeName(T) ++ " not found!");
                 }
 
-                if (comptime @typeInfo(T) != .Pointer and @hasDecl(T, "metaArg")) {
+                if (comptime @typeInfo(T) == .Struct and @hasDecl(T, "metaArg")) {
                     return T.metaArg(self);
                 }
 
@@ -340,9 +340,10 @@ pub const Ctx = struct {
         if (comptime @typeInfo(ctx.T) == .Struct and @hasDecl(ctx.T, "Exports")) {
             const fields = std.meta.fields(ctx.T);
             inline for (ctx.T.Exports) |e| {
-                const index = std.meta.fieldIndex(ctx.T, e).?;
-                if (comptime ctx.push(fields[index].field_type).thisHas(T)) {
-                    return true;
+                if (std.meta.fieldIndex(ctx.T, e)) |index| {
+                    if (comptime ctx.push(fields[index].field_type).thisHas(T)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -354,7 +355,7 @@ pub const Ctx = struct {
     }
 
     pub fn has(comptime ctx: Ctx, comptime T: type) bool {
-        if (comptime @typeInfo(T) != .Pointer and @hasDecl(T, "metaArg")) {
+        if (comptime @typeInfo(T) != .Pointer and @typeInfo(T) == .Struct and @hasDecl(T, "metaArg")) {
             return true;
         }
 
@@ -497,14 +498,12 @@ pub fn toTuple(comptime Systems: anytype) type {
 pub fn OnInit(comptime S: type) type {
     return struct {
         const Self = @This();
-
-        pub const Exports = .{"state"};
-
-        state: S,
+        state: S = undefined,
         pub fn metaInit(ins: anytype) !void {
-            ins.push(&ins.ptr.state).initInstance();
-            ins.push(&ins.ptr.state).tickInstance();
-            ins.push(&ins.ptr.state).deinitInstance();
+            var this = ins.get(*@This());
+            ins.push(&this.state).initInstance();
+            ins.push(&this.state).tickInstance();
+            ins.push(&this.state).deinitInstance();
         }
     };
 }
@@ -517,13 +516,9 @@ pub fn CallFn(comptime f: anytype) type {
         const Self = @This();
         const Args = std.meta.ArgsTuple(@TypeOf(f));
 
-        pub const Exports = .{"rt"};
-
         args: Args,
-        rt: AnyFn.init(f).GetReturnTypeStripError(),
 
         pub fn metaInit(ins: anytype) !void {
-            _ = std.meta.fields(Args);
             comptime var fields = @typeInfo(Args).Struct.fields;
             inline for (fields) |fi, i| {
                 ins.ptr.args[i] = ins.get(fi.field_type);
@@ -531,14 +526,24 @@ pub fn CallFn(comptime f: anytype) type {
         }
 
         pub inline fn metaTick(ins: anytype) !void {
-            ins.ptr.*.rt = ins.callWithArgs(f, ins.ptr.args);
+            comptime var fields = @typeInfo(Args).Struct.fields;
+            inline for (fields) |fi, i| {
+                if (comptime @typeInfo(fi.field_type) != .Pointer) {
+                    ins.ptr.args[i] = ins.get(fi.field_type);
+                }
+            }
+            if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
+                var rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
+                rt.* = ins.callWithArgs(f, ins.ptr.args);
+            } else {
+                ins.callWithArgs(f, ins.ptr.args);
+            }
         }
 
         pub fn WithArgs(comptime L: anytype, comptime R: anytype) type {
             return struct {
                 const Self2 = @This();
                 args: Args,
-                rt: AnyFn.init(f).GetReturnTypeStripError(),
 
                 pub fn metaInit(ins: anytype) !void {
                     comptime var i: usize = 0;
@@ -562,7 +567,12 @@ pub fn CallFn(comptime f: anytype) type {
                 }
 
                 pub inline fn metaTick(ins: anytype) !void {
-                    ins.ptr.*.rt = ins.callWithArgs(f, ins.ptr.*.args);
+                    if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
+                        var rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
+                        rt.* = ins.callWithArgs(f, ins.ptr.args);
+                    } else {
+                        ins.callWithArgs(f, ins.ptr.args);
+                    }
                 }
             };
         }
@@ -894,13 +904,29 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
 pub fn setAlloc() std.mem.Allocator {
     return std.testing.allocator;
 }
-const MyApp = State(.{ OnInit(CallFn(setAlloc)), Foo, addOneToFoo, Bar, appendFooToBar, State(.{
-    Foo, addOneToFoo, Bar, appendFooToBar,
-
+const MyApp = State(.{
+    std.mem.Allocator,
+    i32,
+    OnInit(CallFn(setAlloc)),
+    OnInit(CallFn(ask_user)),
+    print_i32,
+    Foo,
+    addOneToFoo,
+    Bar,
+    appendFooToBar,
     State(.{
-        Foo, addOneToFoo, Bar, appendFooToBar,
+        Foo,
+        addOneToFoo,
+        Bar,
+        appendFooToBar,
+        State(.{
+            Foo,
+            addOneToFoo,
+            Bar,
+            appendFooToBar,
+        }),
     }),
-}) });
+});
 
 const Foo = struct {
     a: usize = 0,
@@ -933,6 +959,30 @@ fn appendFooToBar(foo: *Foo, bar: *Bar) !void {
     try bar.data.append(foo.a);
 }
 
+const builtin = @import("builtin");
+fn ask_user() !i32 {
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    var buf: [10]u8 = undefined;
+
+    try stdout.print("A number please: ", .{});
+
+    const delimiter = if (comptime builtin.os.tag == .windows) '\r' else '\n';
+
+    if (try stdin.readUntilDelimiterOrEof(buf[0..], delimiter)) |user_input| {
+        if (comptime builtin.os.tag == .windows)
+            _ = try stdin.readByte();
+        return std.fmt.parseInt(i32, user_input, 10);
+    } else {
+        return @as(i32, 0);
+    }
+}
+
+fn print_i32(i: i32) void {
+    std.debug.print("{}\n", .{i});
+}
+
 test "Example" {
     var app: MyApp = undefined;
 
@@ -942,8 +992,46 @@ test "Example" {
     ctx_instance.initInstance();
     defer ctx_instance.deinitInstance();
 
-    //running the app state 3 times
-    ctx_instance.tickInstance();
-    ctx_instance.tickInstance();
-    ctx_instance.tickInstance();
+    while (ctx_instance.get(i32) > 0) {
+        ctx_instance.tickInstance();
+    }
 }
+
+// const System = union(enum) {
+//     leaf: type,
+//     node: *const fn(Ctx) type,
+
+//     pub fn Type(self: @This(), ctx: Ctx) type {
+//         switch(self) {
+//             .leaf => |t| return t,
+//             .node => |f| return ctx.gen(f),
+//         }
+//     }
+// };
+
+// fn S(comptime T: System) fn(Ctx) type {
+//     return struct {
+//         pub fn f(comptime ctx: Ctx) type {
+//             return struct {
+//                 state: T.State(ctx),
+
+//                 pub fn init(self: *@This()) void {
+//                     self.state = ctx.init(T);
+//                 }
+
+//                 pub fn tick(self: *@This()) void {
+//                     ctx.tick(T);
+//                 }
+
+//                 pub fn deinit(self: *@This()) void {
+//                     ctx.deinit(T);
+//                 }
+//             };
+//         }
+//     }.f;
+// }
+
+// const App = State(.{
+//     S(OnInit(doFoo)),
+
+// });
