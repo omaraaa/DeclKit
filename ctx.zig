@@ -392,14 +392,14 @@ pub const Ctx = struct {
         }
     }
 
-    pub fn CtxInit(comptime T: type) Ctx {
+    pub fn CtxRoot(comptime T: type) Ctx {
         return Ctx{
             .T = T,
         };
     }
 
-    pub fn init(p: anytype) CtxInit(std.meta.Child(@TypeOf(p))).Instance() {
-        return CtxInit(std.meta.Child(@TypeOf(p))).Instance(){
+    pub fn from(p: anytype) CtxRoot(std.meta.Child(@TypeOf(p))).Instance() {
+        return CtxRoot(std.meta.Child(@TypeOf(p))).Instance(){
             .parent = {},
             .ptr = p,
         };
@@ -901,32 +901,34 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
     };
 }
 
-pub fn setAlloc() std.mem.Allocator {
-    return std.testing.allocator;
-}
 const MyApp = State(.{
+    //add an allocator to state
     std.mem.Allocator,
-    i32,
+    //set the allocator to testing allocator
     OnInit(CallFn(setAlloc)),
-    OnInit(CallFn(ask_user)),
+    //add an i32 to state
+    i32,
+    //initilize the i32 using setI32
+    OnInit(CallFn(setI32)),
+    //set i32 from stdin
     print_i32,
-    Foo,
-    addOneToFoo,
-    Bar,
-    appendFooToBar,
+
+    //State is similar to a div in html. You can nest them togather.
     State(.{
         Foo,
         addOneToFoo,
         Bar,
         appendFooToBar,
-        State(.{
-            Foo,
-            addOneToFoo,
-            Bar,
-            appendFooToBar,
-        }),
     }),
 });
+
+pub fn setAlloc() std.mem.Allocator {
+    return std.testing.allocator;
+}
+
+pub fn setI32() i32 {
+    return 1;
+}
 
 const Foo = struct {
     a: usize = 0,
@@ -987,7 +989,7 @@ test "Example" {
     var app: MyApp = undefined;
 
     //create a ctx instance
-    var ctx_instance = Ctx.init(&app);
+    var ctx_instance = Ctx.create(&app);
 
     ctx_instance.initInstance();
     defer ctx_instance.deinitInstance();
@@ -996,42 +998,3 @@ test "Example" {
         ctx_instance.tickInstance();
     }
 }
-
-// const System = union(enum) {
-//     leaf: type,
-//     node: *const fn(Ctx) type,
-
-//     pub fn Type(self: @This(), ctx: Ctx) type {
-//         switch(self) {
-//             .leaf => |t| return t,
-//             .node => |f| return ctx.gen(f),
-//         }
-//     }
-// };
-
-// fn S(comptime T: System) fn(Ctx) type {
-//     return struct {
-//         pub fn f(comptime ctx: Ctx) type {
-//             return struct {
-//                 state: T.State(ctx),
-
-//                 pub fn init(self: *@This()) void {
-//                     self.state = ctx.init(T);
-//                 }
-
-//                 pub fn tick(self: *@This()) void {
-//                     ctx.tick(T);
-//                 }
-
-//                 pub fn deinit(self: *@This()) void {
-//                     ctx.deinit(T);
-//                 }
-//             };
-//         }
-//     }.f;
-// }
-
-// const App = State(.{
-//     S(OnInit(doFoo)),
-
-// });
