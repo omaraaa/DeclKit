@@ -453,7 +453,7 @@ pub fn State(comptime Systems: anytype) type {
         }
 
         pub fn get(self: *Self, comptime TT: type) TT {
-            return Ctx.init(&self.data).get(TT);
+            return Ctx.from(&self.data).get(TT);
         }
 
         pub fn metaGet(ins: anytype, comptime TT: type) TT {
@@ -461,7 +461,7 @@ pub fn State(comptime Systems: anytype) type {
         }
 
         pub fn metaHas(comptime _: Ctx, comptime TT: type) bool {
-            return Ctx.CtxInit(T).has(TT);
+            return Ctx.CtxRoot(T).has(TT);
         }
     };
 }
@@ -510,7 +510,7 @@ pub fn OnInit(comptime S: type) type {
 
 pub fn CallFn(comptime f: anytype) type {
     if (@typeInfo(@TypeOf(f)) != .Fn) {
-        @compileError("Expected a Function");
+        @compileError("Expected a Function, got " ++ @typeName(@TypeOf(f)));
     }
     return struct {
         const Self = @This();
@@ -689,7 +689,7 @@ pub fn Union(comptime U: type) type {
         pub fn set(self: *@This(), field: std.meta.Tag(U)) !void {
             var active = @enumToInt(std.meta.activeTag(self.ustate));
             //@TODO make sure this is safe
-            self.etable.deinits[active](&self.ustate);
+            self.etable.deinits[active](self.estate, &self.ustate);
 
             inline for (std.meta.fields(std.meta.Tag(U))) |f| {
                 if (f.value == @enumToInt(field)) {
@@ -701,7 +701,7 @@ pub fn Union(comptime U: type) type {
         }
 
         pub fn get(self: *@This()) ?*U {
-            if (!self.set) return null;
+            if (!self.isSet) return null;
             return &self.ustate;
         }
 
@@ -758,7 +758,7 @@ pub fn Mux(comptime T: type) type {
 
                 state: TT = undefined,
 
-                pub fn tick(mux: *Self, this: *@This(), t: TickFor(.state)) !void {
+                pub fn tick(mux: *Self, this: *@This(), t: TickFor(TT)) !void {
                     if (mux.select == e) {
                         t.tick(&this.state);
                     }
