@@ -5,8 +5,8 @@ pub const AnyFn = struct {
     Type: type,
     Value: *const anyopaque,
 
-    pub fn init(f: anytype) Self {
-        return Self{
+    pub fn init(comptime f: anytype) Self {
+        comptime return Self{
             .Type = @TypeOf(f),
             .Value = &f,
         };
@@ -71,14 +71,14 @@ pub const Ctx = struct {
             parent: if (ctx.parent) |p| p.Instance() else void,
             ptr: *ctx.T,
 
-            pub fn push(self: Self, p: anytype) ctx.push(std.meta.Child(@TypeOf(p))).Instance() {
+            pub inline fn push(self: Self, p: anytype) ctx.push(std.meta.Child(@TypeOf(p))).Instance() {
                 return ctx.push(std.meta.Child(@TypeOf(p))).Instance(){
                     .parent = self,
                     .ptr = p,
                 };
             }
 
-            pub fn initInstance(self: Self) void {
+            pub inline fn initInstance(self: Self) void {
                 if (@typeInfo(ctx.T) == .Struct) {
                     inline for (std.meta.fields(C.T)) |f| {
                         if (comptime f.default_value) |dv| {
@@ -111,14 +111,14 @@ pub const Ctx = struct {
                 }
             }
 
-            pub fn initFields(self: Self) void {
+            pub inline fn initFields(self: Self) void {
                 inline for (std.meta.fields(C.T)) |f| {
                     var ptr: *f.field_type = &@field(self.ptr, f.name);
                     self.push(ptr).initInstance();
                 }
             }
 
-            pub fn tickInstance(self: Self) void {
+            pub inline fn tickInstance(self: Self) void {
                 if (@typeInfo(ctx.T) == .Struct) {
                     if (comptime @hasDecl(ctx.T, "TickFields")) {
                         inline for (ctx.T.TickFields) |af| {
@@ -134,13 +134,13 @@ pub const Ctx = struct {
                 }
             }
 
-            pub fn tickFields(self: Self) void {
+            pub inline fn tickFields(self: Self) void {
                 inline for (std.meta.fields(C.T)) |f| {
                     self.push(&@field(self.ptr, f.name)).tickInstance();
                 }
             }
 
-            pub fn deinitInstance(self: Self) void {
+            pub inline fn deinitInstance(self: Self) void {
                 if (@typeInfo(ctx.T) == .Struct) {
                     if (comptime @hasDecl(ctx.T, "metaDeinit")) {
                         ctx.T.metaDeinit(self) catch |err| self.handleError(void, err);
@@ -160,7 +160,7 @@ pub const Ctx = struct {
                 }
             }
 
-            pub fn deinitFields(self: Self) void {
+            pub inline fn deinitFields(self: Self) void {
                 const fields = std.meta.fields(C.T);
                 comptime var i: usize = fields.len;
                 inline while (i > 0) {
@@ -322,6 +322,11 @@ pub const Ctx = struct {
             pub fn erase(self: Self) EState {
                 return EState.init(self);
             }
+            pub inline fn run(self: Self) void {
+                self.initInstance();
+                self.tickInstance();
+                self.deinitInstance();
+            }
         };
     }
     pub fn printCtxStack(comptime ctx: Ctx) []const u8 {
@@ -442,13 +447,13 @@ pub fn State(comptime Systems: anytype) type {
         pub const Exports = .{"data"};
         data: T,
 
-        pub fn metaInit(ins: anytype) !void {
+        pub inline fn metaInit(ins: anytype) !void {
             ins.push(&ins.ptr.data).initFields();
         }
         pub inline fn metaTick(ins: anytype) !void {
             ins.push(&ins.ptr.data).tickFields();
         }
-        pub fn metaDeinit(ins: anytype) !void {
+        pub inline fn metaDeinit(ins: anytype) !void {
             ins.push(&ins.ptr.data).deinitFields();
         }
 
@@ -495,15 +500,14 @@ pub fn toTuple(comptime Systems: anytype) type {
     });
 }
 
-pub fn OnInit(comptime S: type) type {
+pub fn OnInit(comptime T: type) type {
     return struct {
         const Self = @This();
-        state: S = undefined,
+
+        state: T = undefined,
         pub fn metaInit(ins: anytype) !void {
             var this = ins.get(*@This());
-            ins.push(&this.state).initInstance();
-            ins.push(&this.state).tickInstance();
-            ins.push(&this.state).deinitInstance();
+            ins.push(&this.state).run();
         }
     };
 }
@@ -989,12 +993,5 @@ test "Example" {
     var app: MyApp = undefined;
 
     //create a ctx instance
-    var ctx_instance = Ctx.create(&app);
-
-    ctx_instance.initInstance();
-    defer ctx_instance.deinitInstance();
-
-    while (ctx_instance.get(i32) > 0) {
-        ctx_instance.tickInstance();
-    }
+    Ctx.from(&app).run();
 }
