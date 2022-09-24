@@ -82,7 +82,7 @@ pub const Ctx = struct {
                 if (@typeInfo(ctx.T) == .Struct) {
                     inline for (std.meta.fields(C.T)) |f| {
                         if (comptime f.default_value) |dv| {
-                            const V = @ptrCast(*const f.field_type, dv).*;
+                            const V = @ptrCast(*const f.field_type, @alignCast(@alignOf(*const f.field_type), dv)).*;
                             @field(self.ptr, f.name) = V;
                         }
                     }
@@ -448,13 +448,16 @@ pub fn State(comptime Systems: anytype) type {
         data: T,
 
         pub inline fn metaInit(ins: anytype) !void {
-            ins.push(&ins.ptr.data).initFields();
+            var this = ins.get(*@This());
+            ins.push(&this.data).initFields();
         }
         pub inline fn metaTick(ins: anytype) !void {
-            ins.push(&ins.ptr.data).tickFields();
+            var this = ins.get(*@This());
+            ins.push(&this.data).tickFields();
         }
         pub inline fn metaDeinit(ins: anytype) !void {
-            ins.push(&ins.ptr.data).deinitFields();
+            var this = ins.get(*@This());
+            ins.push(&this.data).deinitFields();
         }
 
         pub fn get(self: *Self, comptime TT: type) TT {
@@ -462,7 +465,8 @@ pub fn State(comptime Systems: anytype) type {
         }
 
         pub fn metaGet(ins: anytype, comptime TT: type) TT {
-            return ins.push(&ins.ptr.data).get(TT);
+            var this = ins.get(*@This());
+            return ins.push(&this.data).get(TT);
         }
 
         pub fn metaHas(comptime _: Ctx, comptime TT: type) bool {
@@ -503,7 +507,6 @@ pub fn toTuple(comptime Systems: anytype) type {
 pub fn OnInit(comptime T: type) type {
     return struct {
         const Self = @This();
-
         state: T = undefined,
         pub fn metaInit(ins: anytype) !void {
             var this = ins.get(*@This());
