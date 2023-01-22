@@ -1,3 +1,3 @@
-Experimental zig application framework.
+An experimental Zig library that allows to build applications declarativaly.
 
-Build React like applications in Zig.
+
