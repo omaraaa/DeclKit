@@ -19,7 +19,7 @@ pub const AnyFn = struct {
                 .decls = &.{},
                 .fields = &.{std.builtin.Type.StructField{
                     .name = "0",
-                    .field_type = self.Type,
+                    .type = self.Type,
                     .is_comptime = false,
                     .default_value = self.Value,
                     .alignment = 0,
@@ -53,7 +53,7 @@ pub const AnyFn = struct {
     pub fn Args(comptime self: @This()) []const type {
         comptime var args: []const type = &[_]type{};
         inline for (@typeInfo(self.Type).Fn.args) |p| {
-            args = args ++ &[_]type{p.arg_type.?};
+            args = args ++ &[_]type{p.type.?};
         }
         return args;
     }
@@ -82,7 +82,7 @@ pub const Ctx = struct {
                 if (@typeInfo(ctx.T) == .Struct) {
                     inline for (std.meta.fields(C.T)) |f| {
                         if (comptime f.default_value) |dv| {
-                            const V = @ptrCast(*const f.field_type, @alignCast(@alignOf(*const f.field_type), dv)).*;
+                            const V = @ptrCast(*const f.type, @alignCast(@alignOf(*const f.type), dv)).*;
                             @field(self.ptr, f.name) = V;
                         }
                     }
@@ -113,7 +113,7 @@ pub const Ctx = struct {
 
             pub inline fn initFields(self: Self) void {
                 inline for (std.meta.fields(C.T)) |f| {
-                    var ptr: *f.field_type = &@field(self.ptr, f.name);
+                    var ptr: *f.type = &@field(self.ptr, f.name);
                     self.push(ptr).initInstance();
                 }
             }
@@ -177,8 +177,8 @@ pub const Ctx = struct {
                 const ArgTuple = std.meta.ArgsTuple(f.Type);
                 var args_tuple: ArgTuple = undefined;
                 if (comptime !ctx.has(ArgTuple) or ArgTuple != void) {
-                    inline for (fn_info.args) |a, i| {
-                        const T = a.arg_type.?;
+                    inline for (fn_info.params, 0..) |a, i| {
+                        const T = a.type.?;
 
                         if (comptime @typeInfo(T) != .Pointer and @hasDecl(T, "metaArg")) {
                             args_tuple[i] = T.metaArg(self);
@@ -197,13 +197,13 @@ pub const Ctx = struct {
                 }
 
                 if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
-                    if (@call(.{ .modifier = .always_inline }, comptime f.ptr(), args_tuple)) |r| {
+                    if (@call(.always_inline, comptime f.ptr(), args_tuple)) |r| {
                         return r;
                     } else |err| {
                         return self.handleError(f.GetReturnTypeStripError(), err);
                     }
                 } else {
-                    return @call(.{ .modifier = .always_inline }, comptime f.ptr(), args_tuple);
+                    return @call(.always_inline, comptime f.ptr(), args_tuple);
                 }
             }
 
@@ -212,7 +212,7 @@ pub const Ctx = struct {
                 var args: Args = undefined;
 
                 comptime var i: usize = 0;
-                inline for (std.meta.fields(@TypeOf(L))) |_, ii| {
+                inline for (std.meta.fields(@TypeOf(L)), 0..) |_, ii| {
                     args[i] = L[ii];
                     comptime i += 1;
                 }
@@ -220,10 +220,10 @@ pub const Ctx = struct {
                 comptime var Fields = std.meta.fields(Args);
                 comptime var Last = Fields.len - R.len;
                 inline while (i < Last) {
-                    args[i] = self.get(Fields[i].field_type);
+                    args[i] = self.get(Fields[i].type);
                     comptime i += 1;
                 }
-                inline for (std.meta.fields(@TypeOf(R))) |_, ii| {
+                inline for (std.meta.fields(@TypeOf(R)), 0..) |_, ii| {
                     args[i] = R[ii];
                     comptime i += 1;
                 }
@@ -237,13 +237,13 @@ pub const Ctx = struct {
             pub fn callWithArgs(self: Self, comptime ff: anytype, args: anytype) AnyFn.init(ff).GetReturnTypeStripError() {
                 const f = AnyFn.init(ff);
                 if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
-                    if (@call(.{ .modifier = .always_inline }, comptime f.ptr(), args)) |r| {
+                    if (@call(.always_inline, comptime f.ptr(), args)) |r| {
                         return r;
                     } else |err| {
                         return self.handleError(f.GetReturnTypeStripError(), err);
                     }
                 } else {
-                    return @call(.{ .modifier = .always_inline }, comptime f.ptr(), args);
+                    return @call(.always_inline, comptime f.ptr(), args);
                 }
             }
 
@@ -267,7 +267,7 @@ pub const Ctx = struct {
 
                 const info = @typeInfo(ctx.T).Struct;
                 inline for (info.fields) |f| {
-                    if (comptime ctx.push(f.field_type).thisHas(T)) {
+                    if (comptime ctx.push(f.type).thisHas(T)) {
                         return self.push(&@field(self.ptr, f.name)).getFromField(T);
                     }
                 }
@@ -292,7 +292,7 @@ pub const Ctx = struct {
                     inline for (ctx.T.Exports) |e| {
                         comptime var index = std.meta.fieldIndex(ctx.T, e).?;
                         comptime var name = fields[index].name;
-                        if (comptime ctx.push(fields[index].field_type).thisHas(T)) {
+                        if (comptime ctx.push(fields[index].type).thisHas(T)) {
                             return self.push(&@field(self.ptr, name)).getFromField(T);
                         }
                     }
@@ -309,8 +309,8 @@ pub const Ctx = struct {
 
             pub fn fillTuple(self: Self, comptime T: type) T {
                 var t: T = undefined;
-                inline for (std.meta.fields(T)) |f, i| {
-                    t[i] = self.get(f.field_type);
+                inline for (std.meta.fields(T), 0..) |f, i| {
+                    t[i] = self.get(f.type);
                 }
                 return t;
             }
@@ -346,7 +346,7 @@ pub const Ctx = struct {
             const fields = std.meta.fields(ctx.T);
             inline for (ctx.T.Exports) |e| {
                 if (std.meta.fieldIndex(ctx.T, e)) |index| {
-                    if (comptime ctx.push(fields[index].field_type).thisHas(T)) {
+                    if (comptime ctx.push(fields[index].type).thisHas(T)) {
                         return true;
                     }
                 }
@@ -370,7 +370,7 @@ pub const Ctx = struct {
 
         const info = @typeInfo(ctx.T).Struct;
         inline for (info.fields) |f| {
-            if (comptime ctx.push(f.field_type).thisHas(T)) {
+            if (comptime ctx.push(f.type).thisHas(T)) {
                 return true;
             }
         }
@@ -479,13 +479,13 @@ pub fn State(comptime Systems: anytype) type {
 pub fn toTuple(comptime Systems: anytype) type {
     comptime var fields: []const std.builtin.Type.StructField = &.{};
 
-    inline for (Systems) |s, i| {
+    inline for (Systems, 0..) |s, i| {
         const SType = if (comptime @TypeOf(s) == type) s else CallFn(s);
 
         var num_buf: [128]u8 = undefined;
         const f = std.builtin.Type.StructField{
             .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
-            .field_type = SType,
+            .type = SType,
             .is_comptime = false,
             .default_value = null,
             .alignment = 0,
@@ -507,6 +507,7 @@ pub fn toTuple(comptime Systems: anytype) type {
 pub fn OnInit(comptime T: type) type {
     return struct {
         const Self = @This();
+        u: u8 = 0,
         state: T = undefined,
         pub fn metaInit(ins: anytype) !void {
             var this = ins.get(*@This());
@@ -527,16 +528,16 @@ pub fn CallFn(comptime f: anytype) type {
 
         pub fn metaInit(ins: anytype) !void {
             comptime var fields = @typeInfo(Args).Struct.fields;
-            inline for (fields) |fi, i| {
-                ins.ptr.args[i] = ins.get(fi.field_type);
+            inline for (fields, 0..) |fi, i| {
+                ins.ptr.args[i] = ins.get(fi.type);
             }
         }
 
         pub inline fn metaTick(ins: anytype) !void {
             comptime var fields = @typeInfo(Args).Struct.fields;
-            inline for (fields) |fi, i| {
-                if (comptime @typeInfo(fi.field_type) != .Pointer) {
-                    ins.ptr.args[i] = ins.get(fi.field_type);
+            inline for (fields, 0..) |fi, i| {
+                if (comptime @typeInfo(fi.type) != .Pointer) {
+                    ins.ptr.args[i] = ins.get(fi.type);
                 }
             }
             if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
@@ -561,7 +562,7 @@ pub fn CallFn(comptime f: anytype) type {
                     comptime var Fields = std.meta.fields(Args);
                     comptime var Last = Fields.len - R.len;
                     inline while (i < Last) {
-                        ins.ptr.args[i] = ins.get(Fields[i].field_type);
+                        ins.ptr.args[i] = ins.get(Fields[i].type);
                         comptime i += 1;
                     }
                     inline for (R) |rr| {
@@ -605,7 +606,7 @@ pub const EState = struct {
 
 pub fn OnFieldChange(comptime T: type, comptime field: std.meta.FieldEnum(T), comptime SS: anytype) type {
     return struct {
-        lv: std.meta.fieldInfo(T, field).field_type = undefined,
+        lv: std.meta.fieldInfo(T, field).type = undefined,
         state: SS = undefined,
         pub fn metaInit(ins: anytype) !void {
             var t = ins.get(*T);
@@ -650,8 +651,8 @@ pub fn ETable(comptime S: type) type {
 
         pub fn init(comptime ctx: Ctx) @This() {
             var r: @This() = undefined;
-            inline for (fields) |f, i| {
-                const eins = EInstance(ctx.push(f.field_type));
+            inline for (fields, 0..) |f, i| {
+                const eins = EInstance(ctx.push(f.type));
 
                 r.inits[i] = eins.init;
                 r.deinits[i] = eins.deinit;
@@ -740,7 +741,7 @@ pub fn Mux(comptime T: type) type {
             ins.push(&ins.ptr.data).initFields();
         }
         pub inline fn metaTick(ins: anytype) !void {
-            inline for (std.meta.fields(T)) |f, i| {
+            inline for (std.meta.fields(T), 0..) |f, i| {
                 if (i == @enumToInt(ins.ptr.select)) {
                     ins.push(&@field(ins.ptr.data, f.name)).tickInstance();
                 }
@@ -886,8 +887,8 @@ pub fn Req(comptime Types: []const type) type {
         }
 
         pub fn get(self: @This(), comptime Q: type) Q {
-            inline for (std.meta.fields(T)) |f, i| {
-                if (Q == f.field_type) {
+            inline for (std.meta.fields(T), 0..) |f, i| {
+                if (Q == f.type) {
                     return self.table[i];
                 }
             }
