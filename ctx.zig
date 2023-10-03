@@ -82,7 +82,7 @@ pub const Ctx = struct {
                 if (@typeInfo(ctx.T) == .Struct) {
                     inline for (std.meta.fields(C.T)) |f| {
                         if (comptime f.default_value) |dv| {
-                            const V = @ptrCast(*const f.type, @alignCast(@alignOf(*const f.type), dv)).*;
+                            const V = @as(*const f.type, @ptrCast(@alignCast(dv))).*;
                             @field(self.ptr, f.name) = V;
                         }
                     }
@@ -419,12 +419,12 @@ pub const ECtx = struct {
             pub fn run(p: *anyopaque) void {
                 const ff = f;
 
-                ctx.call(ff, @ptrCast(*ctx.T, @alignCast(@alignOf(*ctx.T), p)));
+                ctx.call(ff, @as(*ctx.T, @ptrCast(@alignCast(p))));
             }
         }.run;
 
         return @This(){
-            .ptr = @ptrCast(*anyopaque, ptr),
+            .ptr = @as(*anyopaque, @ptrCast(ptr)),
             .fun = fun,
         };
     }
@@ -436,7 +436,7 @@ pub const ECtx = struct {
 
 fn getFieldEnum(comptime T: type, comptime name: []const u8) std.meta.FieldEnum(T) {
     comptime @setEvalBranchQuota(10000);
-    return @intToEnum(std.meta.FieldEnum(T), std.meta.fieldIndex(T, name).?);
+    return @as(std.meta.FieldEnum(T), @enumFromInt(std.meta.fieldIndex(T, name).?));
 }
 
 pub fn State(comptime Systems: anytype) type {
@@ -667,15 +667,15 @@ pub fn EInstance(comptime ctx: Ctx) type {
     return struct {
         pub fn init(e: EState, ptr: *anyopaque) void {
             var ins = e.as(ctx.parent.?.Instance());
-            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).initInstance();
+            ins.push(@as(*ctx.T, @ptrCast(@alignCast(ptr)))).initInstance();
         }
         pub fn deinit(e: EState, ptr: *anyopaque) void {
             var ins = e.as(ctx.parent.?.Instance());
-            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).deinitInstance();
+            ins.push(@as(*ctx.T, @ptrCast(@alignCast(ptr)))).deinitInstance();
         }
         pub fn tick(e: EState, ptr: *anyopaque) void {
             var ins = e.as(ctx.parent.?.Instance());
-            ins.push(@ptrCast(*ctx.T, @alignCast(@alignOf(ctx.T), ptr))).tickInstance();
+            ins.push(@as(*ctx.T, @ptrCast(@alignCast(ptr)))).tickInstance();
         }
     };
 }
@@ -695,14 +695,14 @@ pub fn Union(comptime U: type) type {
         }
 
         pub fn set(self: *@This(), field: std.meta.Tag(U)) !void {
-            var active = @enumToInt(std.meta.activeTag(self.ustate));
+            var active = @intFromEnum(std.meta.activeTag(self.ustate));
             //@TODO make sure this is safe
             self.etable.deinits[active](self.estate, &self.ustate);
 
             inline for (std.meta.fields(std.meta.Tag(U))) |f| {
-                if (f.value == @enumToInt(field)) {
+                if (f.value == @intFromEnum(field)) {
                     @field(self.ustate, f.name) = undefined;
-                    self.etable.inits[@enumToInt(field)](self.estate, @ptrCast(*anyopaque, &self.ustate));
+                    self.etable.inits[@intFromEnum(field)](self.estate, @as(*anyopaque, @ptrCast(&self.ustate)));
                 }
             }
             self.isSet = true;
@@ -717,7 +717,7 @@ pub fn Union(comptime U: type) type {
             if (self.isSet) {
                 var active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
-                self.etable.ticks[@enumToInt(active)](self.estate, @ptrCast(*anyopaque, &self.ustate));
+                self.etable.ticks[@intFromEnum(active)](self.estate, @as(*anyopaque, @ptrCast(&self.ustate)));
             }
         }
 
@@ -725,7 +725,7 @@ pub fn Union(comptime U: type) type {
             if (self.isSet) {
                 var active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
-                self.etable.deinits[@enumToInt(active)](self.estate, @ptrCast(*anyopaque, &self.ustate));
+                self.etable.deinits[@intFromEnum(active)](self.estate, @as(*anyopaque, @ptrCast(&self.ustate)));
             }
         }
     };
@@ -735,14 +735,14 @@ pub fn Mux(comptime T: type) type {
     return struct {
         const Self = @This();
         data: T,
-        select: std.meta.FieldEnum(T) = @intToEnum(std.meta.FieldEnum(T), 0),
+        select: std.meta.FieldEnum(T) = @as(std.meta.FieldEnum(T), @enumFromInt(0)),
 
         pub fn metaInit(ins: anytype) !void {
             ins.push(&ins.ptr.data).initFields();
         }
         pub inline fn metaTick(ins: anytype) !void {
             inline for (std.meta.fields(T), 0..) |f, i| {
-                if (i == @enumToInt(ins.ptr.select)) {
+                if (i == @intFromEnum(ins.ptr.select)) {
                     ins.push(&@field(ins.ptr.data, f.name)).tickInstance();
                 }
             }
@@ -814,7 +814,7 @@ pub fn TickFor(comptime T: type) type {
         }
 
         pub inline fn tick(self: @This(), field_ptr: anytype) void {
-            self.fun(self.estate, @ptrCast(*anyopaque, field_ptr));
+            self.fun(self.estate, @as(*anyopaque, @ptrCast(field_ptr)));
         }
     };
 }
@@ -833,7 +833,7 @@ pub fn InitFor(comptime T: type) type {
         }
 
         pub inline fn init(self: @This(), field_ptr: anytype) void {
-            self.fun(self.estate, @ptrCast(*anyopaque, field_ptr));
+            self.fun(self.estate, @as(*anyopaque, @ptrCast(field_ptr)));
         }
     };
 }
@@ -852,7 +852,7 @@ pub fn DeinitFor(comptime T: type) type {
         }
 
         pub inline fn deinit(self: @This(), field_ptr: anytype) void {
-            self.fun(self.estate, @ptrCast(*anyopaque, field_ptr));
+            self.fun(self.estate, @as(*anyopaque, @ptrCast(field_ptr)));
         }
     };
 }
@@ -943,7 +943,7 @@ const Foo = struct {
     b: usize = 10,
 
     pub fn tick(self: *@This()) void {
-        std.debug.print("Foo {any}: {}\n", .{ @ptrToInt(self), self.a });
+        std.debug.print("Foo {any}: {}\n", .{ @intFromPtr(self), self.a });
     }
 };
 
