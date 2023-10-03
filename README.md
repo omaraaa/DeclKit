@@ -27,7 +27,7 @@ const MyApp = State(.{
     //initilize the i32 using setI32
     OnInit(CallFn(setI32)),
 
-    //set i32 from stdin
+    //call print_i32
     print_i32,
 
     //State is similar to a div in html. You can nest them togather.
@@ -77,26 +77,6 @@ const Bar = struct {
 
 fn appendFooToBar(foo: *Foo, bar: *Bar) !void {
     try bar.data.append(foo.a);
-}
-
-const builtin = @import("builtin");
-fn ask_user() !i32 {
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
-
-    var buf: [10]u8 = undefined;
-
-    try stdout.print("A number please: ", .{});
-
-    const delimiter = if (comptime builtin.os.tag == .windows) '\r' else '\n';
-
-    if (try stdin.readUntilDelimiterOrEof(buf[0..], delimiter)) |user_input| {
-        if (comptime builtin.os.tag == .windows)
-            _ = try stdin.readByte();
-        return std.fmt.parseInt(i32, user_input, 10);
-    } else {
-        return @as(i32, 0);
-    }
 }
 
 fn print_i32(i: i32) void {
