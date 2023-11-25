@@ -173,37 +173,46 @@ pub const Ctx = struct {
             pub fn call(self: Self, comptime ff: anytype) AnyFn.init(ff).GetReturnTypeStripError() {
                 const f = AnyFn.init(ff);
                 const fn_info = @typeInfo(f.Type).Fn;
+                return _call(self, fn_info.params, ff, .{});
+            }
 
-                const ArgTuple = std.meta.ArgsTuple(f.Type);
-                var args_tuple: ArgTuple = undefined;
-                if (comptime !ctx.has(ArgTuple) or ArgTuple != void) {
-                    inline for (fn_info.params, 0..) |a, i| {
-                        const T = a.type.?;
-
-                        if (comptime @typeInfo(T) != .Pointer and @hasDecl(T, "metaArg")) {
-                            args_tuple[i] = T.metaArg(self);
-                        } else if (comptime T == ctx.T) {
-                            args_tuple[i] = self.ptr.*;
-                        } else if (comptime T == *ctx.T) {
-                            args_tuple[i] = self.ptr;
+            pub fn _call(self: Self, comptime Args: []const std.builtin.Type.Fn.Param, comptime ff: anytype, args_tuple: anytype) AnyFn.init(ff).GetReturnTypeStripError() {
+                if (comptime Args.len > 0) {
+                    const TO = Args[0].type;
+                    return _call(self, Args[1..], ff, args_tuple ++ .{arg: {
+                        if (TO) |T| {
+                            switch (comptime @typeInfo(T)) {
+                                .Struct, .Enum, .Union, .Opaque => {
+                                    if (comptime @hasDecl(T, "metaArg")) {
+                                        break :arg T.metaArg(self);
+                                    }
+                                },
+                                else => {},
+                            }
+                            if (comptime T == ctx.T) {
+                                break :arg self.ptr.*;
+                            } else if (comptime T == *ctx.T) {
+                                break :arg self.ptr;
+                            } else if (comptime T == Ctx) {
+                                break :arg C;
+                            } else {
+                                break :arg if (comptime ctx.parent != null) self.parent.get(T);
+                            }
                         } else {
-                            args_tuple[i] = if (comptime ctx.parent != null) self.parent.get(T);
+                            break :arg self;
                         }
-                    }
-                } else if (comptime ctx.has(ArgTuple)) {
-                    args_tuple = self.get(ArgTuple);
+                    }});
                 } else {
-                    args_tuple = {};
-                }
-
-                if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
-                    if (@call(.always_inline, comptime f.ptr(), args_tuple)) |r| {
-                        return r;
-                    } else |err| {
-                        return self.handleError(f.GetReturnTypeStripError(), err);
+                    const f = AnyFn.init(ff);
+                    if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
+                        if (@call(.always_inline, comptime f.ptr(), args_tuple)) |r| {
+                            return r;
+                        } else |err| {
+                            return self.handleError(f.GetReturnTypeStripError(), err);
+                        }
+                    } else {
+                        return @call(.always_inline, comptime f.ptr(), args_tuple);
                     }
-                } else {
-                    return @call(.always_inline, comptime f.ptr(), args_tuple);
                 }
             }
 
@@ -523,66 +532,15 @@ pub fn CallFn(comptime f: anytype) type {
     return struct {
         const Self = @This();
         const Args = std.meta.ArgsTuple(@TypeOf(f));
+        a: u8 = 0,
 
-        args: Args,
-
-        pub fn metaInit(ins: anytype) !void {
-            comptime var fields = @typeInfo(Args).Struct.fields;
-            inline for (fields, 0..) |fi, i| {
-                ins.ptr.args[i] = ins.get(fi.type);
-            }
-        }
-
-        pub inline fn metaTick(ins: anytype) !void {
-            comptime var fields = @typeInfo(Args).Struct.fields;
-            inline for (fields, 0..) |fi, i| {
-                if (comptime @typeInfo(fi.type) != .Pointer) {
-                    ins.ptr.args[i] = ins.get(fi.type);
-                }
-            }
+        pub inline fn tick(comptime ctx: Ctx, ins: ctx.Instance()) !void {
             if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
                 var rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
-                rt.* = ins.callWithArgs(f, ins.ptr.args);
+                rt.* = ins.call(f);
             } else {
-                ins.callWithArgs(f, ins.ptr.args);
+                ins.call(f);
             }
-        }
-
-        pub fn WithArgs(comptime L: anytype, comptime R: anytype) type {
-            return struct {
-                const Self2 = @This();
-                args: Args,
-
-                pub fn metaInit(ins: anytype) !void {
-                    comptime var i: usize = 0;
-                    inline for (L) |ll| {
-                        ins.ptr.args[i] = ll;
-                        comptime i += 1;
-                    }
-                    comptime var Fields = std.meta.fields(Args);
-                    comptime var Last = Fields.len - R.len;
-                    inline while (i < Last) {
-                        ins.ptr.args[i] = ins.get(Fields[i].type);
-                        comptime i += 1;
-                    }
-                    inline for (R) |rr| {
-                        ins.ptr.args[i] = rr;
-                        comptime i += 1;
-                    }
-                    if (comptime i != Fields.len) {
-                        @compileError("Not all args set!");
-                    }
-                }
-
-                pub inline fn metaTick(ins: anytype) !void {
-                    if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
-                        var rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
-                        rt.* = ins.callWithArgs(f, ins.ptr.args);
-                    } else {
-                        ins.callWithArgs(f, ins.ptr.args);
-                    }
-                }
-            };
         }
     };
 }
@@ -909,6 +867,13 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
     };
 }
 
+fn fn_with_ctx_param(comptime ctx: Ctx, i: i32, ins: ctx.Instance()) !void {
+    std.debug.print("printing i from fn_with_ctx_param: {}\n", .{i});
+
+    std.debug.print("calling print_i32 from fn_with_ctx_param\n", .{});
+    ins.call(print_i32);
+}
+
 const MyApp = State(.{
     //add an allocator to state
     std.mem.Allocator,
@@ -918,8 +883,8 @@ const MyApp = State(.{
     i32,
     //initilize the i32 using setI32
     OnInit(CallFn(setI32)),
-    //set i32 from stdin
-    print_i32,
+    //call fn_with_ctx_param
+    fn_with_ctx_param,
 
     //State is similar to a div in html. You can nest them togather.
     State(.{
@@ -930,12 +895,12 @@ const MyApp = State(.{
     }),
 });
 
-pub fn setAlloc() std.mem.Allocator {
-    return std.testing.allocator;
+pub fn setAlloc(alloc: *std.mem.Allocator) void {
+    alloc.* = std.testing.allocator;
 }
 
-pub fn setI32() i32 {
-    return 1;
+pub fn setI32(a: *i32) void {
+    a.* = 1;
 }
 
 const Foo = struct {
