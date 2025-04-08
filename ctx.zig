@@ -13,20 +13,24 @@ pub const AnyFn = struct {
     }
 
     pub fn asTuple(comptime self: @This()) type {
-        return @Type(.{
-            .Struct = .{
-                .layout = .Auto,
-                .decls = &.{},
-                .fields = &.{std.builtin.Type.StructField{
-                    .name = "0",
-                    .type = self.Type,
-                    .is_comptime = false,
-                    .default_value = self.Value,
-                    .alignment = 0,
-                }},
-                .is_tuple = true,
-            },
-        });
+        comptime {
+            const v: std.builtin.Type = .{
+                .@"struct" = .{
+                    .layout = .auto,
+                    .decls = &.{},
+                    .fields = &.{std.builtin.Type.StructField{
+                        .name = "0",
+                        .type = self.Type,
+                        .is_comptime = true,
+                        .default_value_ptr = self.Value,
+                        .alignment = 0,
+                    }},
+                    .is_tuple = true,
+                },
+            };
+            const T = @Type(v);
+            return T;
+        }
     }
 
     pub fn GetType(comptime self: @This()) type {
@@ -34,15 +38,15 @@ pub const AnyFn = struct {
     }
 
     pub fn GetReturnType(comptime self: @This()) type {
-        return @typeInfo(self.Type).Fn.return_type.?;
+        return @typeInfo(self.Type).@"fn".return_type.?;
     }
 
     pub fn GetReturnTypeStripError(comptime self: @This()) type {
-        switch (@typeInfo(@typeInfo(self.Type).Fn.return_type.?)) {
-            .ErrorUnion => |e| {
+        switch (@typeInfo(@typeInfo(self.Type).@"fn".return_type.?)) {
+            .error_union => |e| {
                 return e.payload;
             },
-            else => return @typeInfo(self.Type).Fn.return_type.?,
+            else => return @typeInfo(self.Type).@"fn".return_type.?,
         }
     }
 
@@ -52,7 +56,7 @@ pub const AnyFn = struct {
 
     pub fn Args(comptime self: @This()) []const type {
         comptime var args: []const type = &[_]type{};
-        inline for (@typeInfo(self.Type).Fn.args) |p| {
+        inline for (@typeInfo(self.Type).@"fn".args) |p| {
             args = args ++ &[_]type{p.type.?};
         }
         return args;
@@ -69,26 +73,27 @@ pub const Ctx = struct {
             pub const C = ctx;
 
             parent: if (ctx.parent) |p| p.Instance() else void,
-            ptr: *ctx.T,
+            ptr: if (@sizeOf(ctx.T) == 0) void else *ctx.T,
 
             pub inline fn push(self: Self, p: anytype) ctx.push(std.meta.Child(@TypeOf(p))).Instance() {
+                const ptr = if (@sizeOf(std.meta.Child(@TypeOf(p))) == 0) {} else p;
                 return ctx.push(std.meta.Child(@TypeOf(p))).Instance(){
                     .parent = self,
-                    .ptr = p,
+                    .ptr = ptr,
                 };
             }
 
             pub inline fn initInstance(self: Self) void {
-                if (@typeInfo(ctx.T) == .Struct) {
+                if (@typeInfo(ctx.T) == .@"struct") {
                     inline for (std.meta.fields(C.T)) |f| {
-                        if (comptime f.default_value) |dv| {
+                        if (comptime f.default_value_ptr) |dv| {
                             const V = @as(*const f.type, @ptrCast(@alignCast(dv))).*;
                             @field(self.ptr, f.name) = V;
                         }
                     }
                     if (comptime @hasDecl(ctx.T, "init") or @hasDecl(ctx.T, "metaInit")) {
                         if (comptime @hasDecl(ctx.T, "init")) {
-                            const info = @typeInfo(@TypeOf(ctx.T.init)).Fn;
+                            const info = @typeInfo(@TypeOf(ctx.T.init)).@"fn";
                             if (comptime !info.is_generic) {
                                 if (comptime AnyFn.init(ctx.T.init).GetReturnTypeStripError() == ctx.T) {
                                     self.ptr.* = self.call(ctx.T.init);
@@ -113,13 +118,13 @@ pub const Ctx = struct {
 
             pub inline fn initFields(self: Self) void {
                 inline for (std.meta.fields(C.T)) |f| {
-                    var ptr: *f.type = &@field(self.ptr, f.name);
+                    const ptr: *f.type = &@field(self.ptr, f.name);
                     self.push(ptr).initInstance();
                 }
             }
 
             pub inline fn tickInstance(self: Self) void {
-                if (@typeInfo(ctx.T) == .Struct) {
+                if (@typeInfo(ctx.T) == .@"struct") {
                     if (comptime @hasDecl(ctx.T, "TickFields")) {
                         inline for (ctx.T.TickFields) |af| {
                             const info = std.meta.fieldInfo(ctx.T, af);
@@ -141,7 +146,7 @@ pub const Ctx = struct {
             }
 
             pub inline fn deinitInstance(self: Self) void {
-                if (@typeInfo(ctx.T) == .Struct) {
+                if (@typeInfo(ctx.T) == .@"struct") {
                     if (comptime @hasDecl(ctx.T, "metaDeinit")) {
                         ctx.T.metaDeinit(self) catch |err| self.handleError(void, err);
                     }
@@ -172,7 +177,7 @@ pub const Ctx = struct {
 
             pub fn call(self: Self, comptime ff: anytype) AnyFn.init(ff).GetReturnTypeStripError() {
                 const f = AnyFn.init(ff);
-                const fn_info = @typeInfo(f.Type).Fn;
+                const fn_info = @typeInfo(f.Type).@"fn";
                 return _call(self, fn_info.params, ff, .{});
             }
 
@@ -182,7 +187,7 @@ pub const Ctx = struct {
                     return _call(self, Args[1..], ff, args_tuple ++ .{arg: {
                         if (TO) |T| {
                             switch (comptime @typeInfo(T)) {
-                                .Struct, .Enum, .Union, .Opaque => {
+                                .@"struct", .@"enum", .@"union", .@"opaque" => {
                                     if (comptime @hasDecl(T, "metaArg")) {
                                         break :arg T.metaArg(self);
                                     }
@@ -204,7 +209,7 @@ pub const Ctx = struct {
                     }});
                 } else {
                     const f = AnyFn.init(ff);
-                    if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
+                    if (comptime @typeInfo(f.GetReturnType()) == .error_union) {
                         if (@call(.always_inline, comptime f.ptr(), args_tuple)) |r| {
                             return r;
                         } else |err| {
@@ -226,8 +231,8 @@ pub const Ctx = struct {
                     comptime i += 1;
                 }
 
-                comptime var Fields = std.meta.fields(Args);
-                comptime var Last = Fields.len - R.len;
+                const Fields = std.meta.fields(Args);
+                const Last = Fields.len - R.len;
                 inline while (i < Last) {
                     args[i] = self.get(Fields[i].type);
                     comptime i += 1;
@@ -245,7 +250,7 @@ pub const Ctx = struct {
 
             pub fn callWithArgs(self: Self, comptime ff: anytype, args: anytype) AnyFn.init(ff).GetReturnTypeStripError() {
                 const f = AnyFn.init(ff);
-                if (comptime @typeInfo(f.GetReturnType()) == .ErrorUnion) {
+                if (comptime @typeInfo(f.GetReturnType()) == .error_union) {
                     if (@call(.always_inline, comptime f.ptr(), args)) |r| {
                         return r;
                     } else |err| {
@@ -266,7 +271,7 @@ pub const Ctx = struct {
                     @compileError(@typeName(T) ++ " not found!");
                 }
 
-                if (comptime @typeInfo(T) == .Struct and @hasDecl(T, "metaArg")) {
+                if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "metaArg")) {
                     return T.metaArg(self);
                 }
 
@@ -274,7 +279,7 @@ pub const Ctx = struct {
                     return self.getFromField(T);
                 }
 
-                const info = @typeInfo(ctx.T).Struct;
+                const info = @typeInfo(ctx.T).@"struct";
                 inline for (info.fields) |f| {
                     if (comptime ctx.push(f.type).thisHas(T)) {
                         return self.push(&@field(self.ptr, f.name)).getFromField(T);
@@ -296,18 +301,18 @@ pub const Ctx = struct {
                 }
 
                 //Exports
-                if (comptime @typeInfo(ctx.T) == .Struct and @hasDecl(ctx.T, "Exports")) {
-                    comptime var fields = std.meta.fields(ctx.T);
+                if (comptime @typeInfo(ctx.T) == .@"struct" and @hasDecl(ctx.T, "Exports")) {
+                    const fields = std.meta.fields(ctx.T);
                     inline for (ctx.T.Exports) |e| {
-                        comptime var index = std.meta.fieldIndex(ctx.T, e).?;
-                        comptime var name = fields[index].name;
+                        const index = std.meta.fieldIndex(ctx.T, e).?;
+                        const name = fields[index].name;
                         if (comptime ctx.push(fields[index].type).thisHas(T)) {
                             return self.push(&@field(self.ptr, name)).getFromField(T);
                         }
                     }
                 }
 
-                if (comptime @typeInfo(ctx.T) == .Struct and @hasDecl(ctx.T, "metaGet")) {
+                if (comptime @typeInfo(ctx.T) == .@"struct" and @hasDecl(ctx.T, "metaGet")) {
                     if (comptime ctx.T.metaHas(ctx, T)) {
                         return ctx.T.metaGet(self, T);
                     }
@@ -338,11 +343,11 @@ pub const Ctx = struct {
             }
         };
     }
-    pub fn printCtxStack(comptime ctx: Ctx) []const u8 {
+    pub inline fn printCtxStack(comptime ctx: Ctx) []const u8 {
         if (comptime ctx.parent == null) {
             return @typeName(ctx.T);
         } else {
-            comptime var trace = printCtxStack(ctx.parent.?.*) ++ "\n| " ++ @typeName(ctx.T);
+            const trace = printCtxStack(ctx.parent.?.*) ++ "\n| " ++ @typeName(ctx.T);
             return trace;
         }
     }
@@ -351,7 +356,7 @@ pub const Ctx = struct {
             return true;
         }
 
-        if (comptime @typeInfo(ctx.T) == .Struct and @hasDecl(ctx.T, "Exports")) {
+        if (comptime @typeInfo(ctx.T) == .@"struct" and @hasDecl(ctx.T, "Exports")) {
             const fields = std.meta.fields(ctx.T);
             inline for (ctx.T.Exports) |e| {
                 if (std.meta.fieldIndex(ctx.T, e)) |index| {
@@ -362,14 +367,14 @@ pub const Ctx = struct {
             }
         }
 
-        if (comptime @typeInfo(ctx.T) == .Struct and @hasDecl(ctx.T, "metaHas")) {
+        if (comptime @typeInfo(ctx.T) == .@"struct" and @hasDecl(ctx.T, "metaHas")) {
             return ctx.T.metaHas(ctx, T);
         }
         return false;
     }
 
     pub fn has(comptime ctx: Ctx, comptime T: type) bool {
-        if (comptime @typeInfo(T) != .Pointer and @typeInfo(T) == .Struct and @hasDecl(T, "metaArg")) {
+        if (comptime @typeInfo(T) != .pointer and @typeInfo(T) == .@"struct" and @hasDecl(T, "metaArg")) {
             return true;
         }
 
@@ -377,7 +382,7 @@ pub const Ctx = struct {
             return true;
         }
 
-        const info = @typeInfo(ctx.T).Struct;
+        const info = @typeInfo(ctx.T).@"struct";
         inline for (info.fields) |f| {
             if (comptime ctx.push(f.type).thisHas(T)) {
                 return true;
@@ -491,12 +496,13 @@ pub fn toTuple(comptime Systems: anytype) type {
     inline for (Systems, 0..) |s, i| {
         const SType = if (comptime @TypeOf(s) == type) s else CallFn(s);
 
-        var num_buf: [128]u8 = undefined;
+        var num_buf: [128]u8 = std.mem.zeroes([128]u8);
+        const slice = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable;
         const f = std.builtin.Type.StructField{
-            .name = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable,
+            .name = slice[0..slice.len :0],
             .type = SType,
             .is_comptime = false,
-            .default_value = null,
+            .default_value_ptr = null,
             .alignment = 0,
         };
 
@@ -504,8 +510,8 @@ pub fn toTuple(comptime Systems: anytype) type {
     }
 
     return @Type(.{
-        .Struct = .{
-            .layout = .Auto,
+        .@"struct" = .{
+            .layout = .auto,
             .decls = &.{},
             .fields = fields,
             .is_tuple = true,
@@ -526,7 +532,7 @@ pub fn OnInit(comptime T: type) type {
 }
 
 pub fn CallFn(comptime f: anytype) type {
-    if (@typeInfo(@TypeOf(f)) != .Fn) {
+    if (@typeInfo(@TypeOf(f)) != .@"fn") {
         @compileError("Expected a Function, got " ++ @typeName(@TypeOf(f)));
     }
     return struct {
@@ -536,7 +542,7 @@ pub fn CallFn(comptime f: anytype) type {
 
         pub inline fn tick(comptime ctx: Ctx, ins: ctx.Instance()) !void {
             if (comptime AnyFn.init(f).GetReturnTypeStripError() != void) {
-                var rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
+                const rt = ins.get(*AnyFn.init(f).GetReturnTypeStripError());
                 rt.* = ins.call(f);
             } else {
                 ins.call(f);
@@ -567,13 +573,13 @@ pub fn OnFieldChange(comptime T: type, comptime field: std.meta.FieldEnum(T), co
         lv: std.meta.fieldInfo(T, field).type = undefined,
         state: SS = undefined,
         pub fn metaInit(ins: anytype) !void {
-            var t = ins.get(*T);
+            const t = ins.get(*T);
             ins.ptr.lv = @field(t, std.meta.fieldInfo(T, field).name);
 
             ins.push(&ins.ptr.state).initInstance();
         }
         pub inline fn metaTick(ins: anytype) !void {
-            var t = ins.get(*T);
+            const t = ins.get(*T);
             if (ins.ptr.lv != @field(t, std.meta.fieldInfo(T, field).name)) {
                 ins.push(&ins.ptr.state).tickInstance();
                 ins.ptr.lv = @field(t, std.meta.fieldInfo(T, field).name);
@@ -653,7 +659,7 @@ pub fn Union(comptime U: type) type {
         }
 
         pub fn set(self: *@This(), field: std.meta.Tag(U)) !void {
-            var active = @intFromEnum(std.meta.activeTag(self.ustate));
+            const active = @intFromEnum(std.meta.activeTag(self.ustate));
             //@TODO make sure this is safe
             self.etable.deinits[active](self.estate, &self.ustate);
 
@@ -673,7 +679,7 @@ pub fn Union(comptime U: type) type {
 
         pub fn tick(self: *@This()) !void {
             if (self.isSet) {
-                var active = std.meta.activeTag(self.ustate);
+                const active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
                 self.etable.ticks[@intFromEnum(active)](self.estate, @as(*anyopaque, @ptrCast(&self.ustate)));
             }
@@ -681,7 +687,7 @@ pub fn Union(comptime U: type) type {
 
         pub fn deinit(self: *@This()) !void {
             if (self.isSet) {
-                var active = std.meta.activeTag(self.ustate);
+                const active = std.meta.activeTag(self.ustate);
                 //@TODO make sure this is safe
                 self.etable.deinits[@intFromEnum(active)](self.estate, @as(*anyopaque, @ptrCast(&self.ustate)));
             }
@@ -743,7 +749,7 @@ pub fn Mux(comptime T: type) type {
                 on: bool = false,
 
                 pub inline fn metaTick(ins: anytype) !void {
-                    var mux = ins.get(*Self);
+                    const mux = ins.get(*Self);
                     if (mux.select == e) {
                         ins.ptr.on = true;
                     } else if (ins.ptr.on) {
@@ -820,15 +826,15 @@ pub fn FromDo(comptime From: type, comptime Do: type) type {
         state: Do,
 
         pub fn metaInit(ins: anytype) !void {
-            var f = ins.get(*From);
+            const f = ins.get(*From);
             ins.push(f).push(&ins.ptr.state).initInstance();
         }
         pub fn metaDeinit(ins: anytype) !void {
-            var f = ins.get(*From);
+            const f = ins.get(*From);
             ins.push(f).push(&ins.ptr.state).deinitInstance();
         }
         pub fn metaTick(ins: anytype) !void {
-            var f = ins.get(*From);
+            const f = ins.get(*From);
             ins.push(f).push(&ins.ptr.state).tickInstance();
         }
     };
@@ -860,40 +866,50 @@ pub fn ActiveOnField(comptime P: type, comptime tag: anytype, comptime value: an
         state: T,
 
         pub inline fn metaTick(ins: anytype) !void {
-            var p = ins.get(*P);
+            const p = ins.get(*P);
             if (@field(p, @tagName(tag)) == value)
                 ins.push(&ins.ptr.state).tickInstance();
         }
     };
 }
 
-fn fn_with_ctx_param(comptime ctx: Ctx, i: i32, ins: ctx.Instance()) !void {
-    std.debug.print("printing i from fn_with_ctx_param: {}\n", .{i});
-
+fn fn_with_ctx_param(comptime ctx: Ctx, ins: ctx.Instance()) !void {
     std.debug.print("calling print_i32 from fn_with_ctx_param\n", .{});
     ins.call(print_i32);
 }
 
 const MyApp = State(.{
-    //add an allocator to state
+    Print("add an allocator to state"),
     std.mem.Allocator,
-    //set the allocator to testing allocator
+    Print("set the allocator to testing allocator"),
     OnInit(CallFn(setAlloc)),
-    //add an i32 to state
+    Print("add an i32 to state"),
     i32,
-    //initilize the i32 using setI32
+    Print("call setI32 to set the i32 to 1"),
     OnInit(CallFn(setI32)),
-    //call fn_with_ctx_param
+    Print("call fn_with_ctx_param"),
     fn_with_ctx_param,
 
-    //State is similar to a div in html. You can nest them togather.
+    Print("Creating nested state"),
     State(.{
+        Print("Add Foo to state"),
         Foo,
+        Print("call addOneToFoo"),
         addOneToFoo,
+        Print("Add Bar to state"),
         Bar,
+        Print("call appendFooToBar"),
         appendFooToBar,
     }),
 });
+
+pub fn Print(comptime msg: []const u8) type {
+    return struct {
+        pub fn tick() void {
+            std.debug.print(msg ++ "\n", .{});
+        }
+    };
+}
 
 pub fn setAlloc(alloc: *std.mem.Allocator) void {
     alloc.* = std.testing.allocator;
